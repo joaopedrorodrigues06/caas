@@ -18,7 +18,7 @@ Abra diretamente o arquivo `index.html` em qualquer navegador web, ou publique v
 
 ## Publicação no GitHub Pages e confirmações compartilhadas
 
-O workflow `.github/workflows/pages.yml` publica o convite em `https://joaopedrorodrigues06.github.io/caas/` quando há um push na branch `main`. Na primeira publicação, em **Settings → Pages**, escolha **GitHub Actions** como fonte.
+O workflow `.github/workflows/pages.yml` publica o convite em `https://joaopedrorodrigues06.github.io/caas/` quando há um push na branch `main`. Para ativar o Pages automaticamente, crie um fine-grained token limitado a este repositório, com permissões **Pages: Read and write** e **Administration: Read and write**, e salve-o como secret `PAGES_TOKEN` em **Settings → Secrets and variables → Actions**. O token só é usado para habilitar o Pages; o deploy usa o token do workflow.
 
 Para que confirmações de todos os convidados apareçam no painel dos noivos:
 

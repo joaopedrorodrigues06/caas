@@ -35,6 +35,7 @@ jobs:
         uses: actions/configure-pages@v5
         with:
           enablement: true
+          token: ${{ secrets.PAGES_TOKEN || github.token }}
       - name: Upload site files
         uses: actions/upload-pages-artifact@v3
         with:
