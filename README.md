@@ -7,7 +7,7 @@ Página web interativa e elegante para convite de casamento.
 - 💌 **Envelope Interativo**: Animação suave de abertura de envelope com lacre de cera.
 - ⏳ **Contagem Regressiva**: Cronômetro em tempo real até o início da cerimônia.
 - 📍 **Como Chegar**: Integração direta com Google Maps para localização do local do evento.
-- 📝 **Confirmação de Presença (RSVP)**: Formulário compartilhado via Supabase.
+- 📝 **Confirmação de Presença (RSVP)**: Formulário compartilhado por API do Vercel e PostgreSQL Neon.
 - 📖 **Manual dos Convidados**: Informações sobre trajes, horários e orientações gerais.
 - 🎁 **Lista de Presentes & PIX**: Lista com cotas/presentes e botão de cópia de chave PIX.
 - 📱 **Mobile-First & Responsivo**: Experiência otimizada para smartphones com suporte a modo claro/escuro.
@@ -18,13 +18,12 @@ Abra diretamente o arquivo `index.html` em qualquer navegador web, ou publique v
 
 ## Publicação e confirmações compartilhadas
 
-O projeto publica no Vercel por meio de `vercel.json` e `scripts/build-site.mjs`. Defina `SUPABASE_URL` e `SUPABASE_ANON_KEY` como variáveis de ambiente Production no projeto Vercel; o build grava esses valores em `config.js` dentro da pasta de saída. O workflow opcional `.github/workflows/pages.yml` pode publicar pelo GitHub Pages se for iniciado manualmente e o secret `PAGES_TOKEN` estiver configurado.
+O projeto publica no Vercel por meio de `vercel.json` e `scripts/build-site.mjs`. Os endpoints em `api/` guardam confirmações e escolhas de presentes em PostgreSQL Neon; o banco é conectado ao projeto pela integração gratuita do Vercel Marketplace. Não é necessário configurar Supabase.
 
 Para que confirmações de todos os convidados apareçam no painel dos noivos:
 
-1. Crie um projeto Supabase e execute [`supabase/schema.sql`](supabase/schema.sql) no SQL Editor. Para limpar os dados de teste já existentes no projeto, execute [`supabase/reset-test-data.sql`](supabase/reset-test-data.sql) uma única vez.
-2. Em **Authentication → Providers → Email**, desative novos cadastros públicos; crie apenas as contas do casal em **Authentication → Users**. O painel usa login por e-mail e senha; não compartilhe credenciais.
-3. Em **Vercel → Project → Settings → Environment Variables**, crie `SUPABASE_URL` e `SUPABASE_ANON_KEY` para Production e faça um redeploy. Para GitHub Pages, adicione esses nomes como Actions secrets no repositório. Use a publishable/anon key, nunca a `service_role`.
-4. Sem as duas variáveis, o site não salva confirmações nem escolhas localmente; ele informa que o banco ainda não está disponível. Assim os dispositivos não mostram listas diferentes nem indicam falsamente que a resposta foi registrada.
+1. Conecte uma instância Neon gratuita ao projeto Vercel e confirme que `DATABASE_URL` está disponível no ambiente Production. As tabelas são criadas automaticamente na primeira requisição.
+2. Defina `ADMIN_PASSWORD` (senha privada do casal) e `SESSION_SECRET` (segredo aleatório) como variáveis de ambiente Production e faça redeploy.
+3. Confirmações de presença são compartilhadas e só aparecem no painel privado `/#/painel-dos-noivos`, protegido pela senha do casal. A lista pública mostra presentes disponíveis ou já escolhidos e atualiza automaticamente.
 
-O link do painel, sem botão de acesso no convite, é `https://caas-nine-phi.vercel.app/#/painel-dos-noivos`. Com o banco configurado, ele mostra as respostas de qualquer aparelho e atualiza automaticamente a cada 15 segundos. Os dados antigos de teste guardados no `localStorage` são removidos quando cada aparelho abre a nova versão.
+O link do painel, sem botão de acesso no convite, é `https://caas-nine-phi.vercel.app/#/painel-dos-noivos`. Com o banco configurado, ele mostra as respostas de qualquer aparelho e atualiza automaticamente a cada 15 segundos. Dados antigos de teste guardados no `localStorage` são removidos ao abrir a nova versão.

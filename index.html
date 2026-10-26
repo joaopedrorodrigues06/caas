@@ -157,7 +157,6 @@ footer .mono{font-size:2.2rem}
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <button id="mus" type="button" aria-pressed="false">♪ Música</button>
 
-<script src="./config.js"></script>
 <script>
 /* ============ CONFIG — edite aqui ============ */
 const CONFIG = {
@@ -169,8 +168,6 @@ const CONFIG = {
   maps: "https://maps.app.goo.gl/7RwJqfQc6ujotgk8A?g_st=iw",
   pix: "Barbosaannacarolina9@gmail.com",
   music: "",                      // URL de um .mp3; vazio = botão preparado
-  /* Credenciais públicas de acesso injetadas pelo build; as políticas RLS protegem os dados. */
-  supabase: window.CASAL_SUPABASE || { url: "", anonKey: "" }
 };
 /* Fotos: troque apenas aqui (PHOTO_1, PHOTO_2, PHOTO_3) */
 const PHOTOS = {
@@ -194,43 +191,40 @@ const GIFTS = Object.entries(CATS).flatMap(([cat,[ic,l]],ci) => l.map(([n,v],i) 
 const Service = (() => {
   let mode="unavailable", gifts={}, subs=new Set();
   const emit=()=>subs.forEach(f=>f({...gifts}));
-  const sb=CONFIG.supabase, H={apikey:sb.anonKey,Authorization:"Bearer "+sb.anonKey,"Content-Type":"application/json"};
-  async function loadSb(){ const r=await fetch(sb.url+"/rest/v1/gift_claims?select=gift_id,guest_name",{headers:H}); if(!r.ok) throw new Error("gifts"); const a=await r.json(); gifts={}; a.forEach(x=>gifts[x.gift_id]={name:x.guest_name}); emit(); }
+  async function request(path,options={}){
+    const r=await fetch(path,{...options,headers:{"Content-Type":"application/json",...(options.headers||{})}});
+    let data={}; try{data=await r.json()}catch(e){}
+    if(!r.ok){const x=new Error(data.error||"request_failed");x.status=r.status;throw x;}
+    return data;
+  }
+  async function loadGifts(){const data=await request("/api/gifts");gifts={};data.gifts.forEach(x=>gifts[x.id]={name:x.name,at:Date.parse(x.at)});emit();}
   return {
     get mode(){return mode},
     async init(){
       try{ localStorage.removeItem("ae_rsvps"); localStorage.removeItem("ae_gifts"); }catch(e){}
-      if(!sb.url||!sb.anonKey){ mode="unavailable"; gifts={}; emit(); return; }
-      mode="sb";
-      try{ await loadSb(); setInterval(()=>loadSb().catch(()=>{}),15000); }
+      mode="api";
+      try{ await loadGifts(); setInterval(()=>loadGifts().catch(()=>{}),15000); }
       catch(e){ mode="unavailable"; gifts={}; emit(); }
     },
     onGifts(f){subs.add(f);f({...gifts});return()=>subs.delete(f)},
     async claimGift(id,name){
-      if(mode==="sb"){
-        const r=await fetch(sb.url+"/rest/v1/gift_claims",{method:"POST",headers:{...H,Prefer:"return=minimal"},body:JSON.stringify({gift_id:id,guest_name:name})});
-        if(r.status===409){ await loadSb(); return {ok:false}; }
-        if(!r.ok) throw new Error("claim"); await loadSb(); return {ok:true};
-      }
-      throw new Error("shared_backend_unavailable");
+      if(mode!=="api") throw new Error("shared_backend_unavailable");
+      try{await request("/api/gifts",{method:"POST",body:JSON.stringify({giftId:id,guestName:name})});}
+      catch(e){if(e.status===409){await loadGifts();return {ok:false};}throw e;}
+      await loadGifts();return {ok:true};
     },
-    async login(email,pw){
-      const r=await fetch(sb.url+"/auth/v1/token?grant_type=password",{method:"POST",headers:{apikey:sb.anonKey,"Content-Type":"application/json"},body:JSON.stringify({email,password:pw})});
-      if(!r.ok) throw new Error("login"); return (await r.json()).access_token;
+    async login(password){
+      return request("/api/admin-login",{method:"POST",body:JSON.stringify({password})});
     },
-    async adminLoad(token){
-      if(mode==="sb"){
-        const h={...H,Authorization:"Bearer "+token};
-        const [r,g]=await Promise.all([fetch(sb.url+"/rest/v1/rsvps?select=*&order=created_at.desc",{headers:h}),fetch(sb.url+"/rest/v1/gift_claims?select=*&order=chosen_at.desc",{headers:h})]);
-        if(!r.ok||!g.ok) throw new Error("auth");
-        const a=await r.json(), b=await g.json();
-        return {rsvps:a.map(x=>({name:x.guest_name,attending:x.attending,at:Date.parse(x.created_at)})),gifts:b.map(x=>({id:x.gift_id,name:x.guest_name,at:Date.parse(x.chosen_at)}))};
-      }
-      throw new Error("shared_backend_unavailable");
+    async adminLoad(){
+      const data=await request("/api/admin-data");
+      return {rsvps:data.rsvps.map(x=>({name:x.name,attending:x.attending,at:Date.parse(x.at)})),gifts:data.gifts.map(x=>({id:x.id,name:x.name,at:Date.parse(x.at)}))};
     },
     async saveRsvp(name,attending){
-      if(mode==="sb"){ const r=await fetch(sb.url+"/rest/v1/rsvps",{method:"POST",headers:{...H,Prefer:"return=minimal"},body:JSON.stringify({guest_name:name,attending})}); if(!r.ok) throw new Error("rsvp"); return; }
-      throw new Error("shared_backend_unavailable");
+      if(mode!=="api") throw new Error("shared_backend_unavailable");
+      await request("/api/rsvps",{method:"POST",body:JSON.stringify({name,attending})});
+    },
+    async logout(){return request("/api/admin-logout",{method:"POST"});
     }
   };
 })();
@@ -390,11 +384,11 @@ function route(){
   reveal(); parallax(); startCd();
 }
 async function bindAdmin(){
-  const box=$("#admbody"); await READY; let token=null, tab="y", q="";
+  const box=$("#admbody"); await READY; let tab="y", q="";
   const dt=s=>s?new Date(s).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"}):"";
   const gname=id=>{const g=GIFTS.find(x=>x.id===id);return g?g.n:id};
   async function show(){
-    let d; try{ d=await Service.adminLoad(token); }catch(e){ box.innerHTML='<p class="msg">Sem permissão para ver estes dados.</p>'; return; }
+    let d; try{ d=await Service.adminLoad(); }catch(e){ if(e.status===401){loginForm();return;} box.innerHTML='<p class="msg">Não foi possível carregar os dados. Tente atualizar em instantes.</p>'; return; }
     const yes=d.rsvps.filter(r=>r.attending), no=d.rsvps.filter(r=>!r.attending);
     const draw=()=>{
       const L=(tab==="y"?yes:tab==="n"?no:d.gifts).filter(r=>(r.name+(r.id?gname(r.id):"")).toLowerCase().includes(q));
@@ -405,18 +399,21 @@ async function bindAdmin(){
         <div class="chips">${[["y","Confirmados"],["n","Não vão"],["g","Presentes"]].map(([k,l])=>`<button class="chip" type="button" data-t="${k}" aria-pressed="${k===tab}">${l}</button>`).join("")}</div>
         <input type="text" id="aq" placeholder="Buscar por nome" value="${esc(q)}" aria-label="Buscar">
         <div style="margin-top:18px">${L.length?L.map(r=>`<div class="guide" style="padding:14px 0;display:flex;justify-content:space-between;gap:12px"><span>${esc(r.name)}${r.id?`<br><small style="color:var(--soft)">${esc(gname(r.id))}</small>`:""}</span><small style="color:var(--soft);white-space:nowrap">${dt(r.at)}</small></div>`).join(""):'<p class="msg" style="color:var(--soft)">Ninguém por aqui ainda.</p>'}</div>
-        <div style="text-align:center;margin-top:24px"><button class="btn" id="ar" type="button">Atualizar</button></div>`;
+        <div style="text-align:center;margin-top:24px"><button class="btn" id="ar" type="button">Atualizar</button> <button class="btn" id="al" type="button">Sair</button></div>`;
       box.querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{tab=b.dataset.t;draw()});
       const i=$("#aq"); i.oninput=e=>{q=e.target.value.toLowerCase();const p=i.selectionStart;draw();const n=$("#aq");n.focus();n.setSelectionRange(p,p)};
       $("#ar").onclick=show;
+      $("#al").onclick=async()=>{await Service.logout();loginForm();};
     };
     draw();
     if(!adminRefresh) adminRefresh=setInterval(()=>{if(document.visibilityState==="visible") show();},15000);
   }
-  if(Service.mode==="sb"){
-    box.innerHTML='<form id="lf"><label for="le">E-mail</label><input type="text" id="le" autocomplete="username"><label for="lp">Senha</label><input type="password" id="lp" autocomplete="current-password" style="width:100%;font:300 1.05rem var(--sans);padding:14px 2px;border:0;border-bottom:1px solid var(--ink);background:transparent;color:var(--ink)"><p class="err" id="le2" role="alert"></p><div style="text-align:center;margin-top:14px"><button class="btn fill" type="submit">Entrar</button></div></form>';
-    $("#lf").onsubmit=async e=>{e.preventDefault();try{token=await Service.login($("#le").value.trim(),$("#lp").value);await show();}catch(x){$("#le2").textContent="E-mail ou senha incorretos."}};
-  } else { box.innerHTML='<p class="msg" style="color:var(--soft)">O painel compartilhado está aguardando a configuração do banco de dados.</p>'; }
+  function loginForm(){
+    box.innerHTML='<form id="lf"><label for="lp">Senha do casal</label><input type="password" id="lp" autocomplete="current-password" required style="width:100%;font:300 1.05rem var(--sans);padding:14px 2px;border:0;border-bottom:1px solid var(--ink);background:transparent;color:var(--ink)"><p class="err" id="le2" role="alert"></p><div style="text-align:center;margin-top:14px"><button class="btn fill" type="submit">Entrar</button></div></form>';
+    $("#lf").onsubmit=async e=>{e.preventDefault();const err=$("#le2");try{await Service.login($("#lp").value);await show();}catch(x){err.textContent=x.status===503?"Painel ainda não configurado no servidor.":"Senha incorreta."}};
+  }
+  if(Service.mode==="api") loginForm();
+  else box.innerHTML='<p class="msg" style="color:var(--soft)">O serviço compartilhado está temporariamente indisponível.</p>';
 }
 let cdT=null;
 function startCd(){
