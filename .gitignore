@@ -6,6 +6,8 @@ Thumbs.db
 .idea/
 dist/
 node_modules/
+.agents/
+skills-lock.json
 .vercel
 .env*
 supabase/.temp/
