@@ -1,8 +1,6 @@
 name: Publish wedding site
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -27,10 +25,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          node -e 'require("fs").writeFileSync("config.js", "window.CASAL_SUPABASE = " + JSON.stringify({url: process.env.SUPABASE_URL || "", anonKey: process.env.SUPABASE_ANON_KEY || ""}) + ";\n")'
-          mkdir -p dist
-          cp index.html convite-AE.html config.js dist/
+        run: node scripts/build-site.mjs
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
         with:

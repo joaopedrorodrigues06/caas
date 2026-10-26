@@ -169,8 +169,7 @@ const CONFIG = {
   maps: "https://maps.app.goo.gl/7RwJqfQc6ujotgk8A?g_st=iw",
   pix: "Barbosaannacarolina9@gmail.com",
   music: "",                      // URL de um .mp3; vazio = botão preparado
-  /* Backend real (Supabase). Preencha ao hospedar em domínio próprio — a anon key é pública por
-     design e só funciona com as regras RLS de supabase/schema.sql. NUNCA coloque a service key aqui. */
+  /* Credenciais públicas de acesso injetadas pelo build; as políticas RLS protegem os dados. */
   supabase: window.CASAL_SUPABASE || { url: "", anonKey: "" }
 };
 /* Fotos: troque apenas aqui (PHOTO_1, PHOTO_2, PHOTO_3) */
@@ -191,25 +190,20 @@ const CATS = {
 };
 const GIFTS = Object.entries(CATS).flatMap(([cat,[ic,l]],ci) => l.map(([n,v],i) => ({id:"c"+ci+"-"+i,cat,ic,n,v})));
 
-/* ============ SERVIÇO DE DADOS (camada separada) ============
-   1) Supabase REST (produção, compartilhado; duplicidade barrada por UNIQUE no banco)
-   2) Banco do Artifact (prévia, só para quem tem acesso)
-   3) localStorage (apenas demonstração local)                                          */
+/* ============ SERVIÇO DE DADOS COMPARTILHADO ============ */
 const Service = (() => {
-  let db=null, mode="local", gifts={}, subs=new Set();
+  let mode="unavailable", gifts={}, subs=new Set();
   const emit=()=>subs.forEach(f=>f({...gifts}));
-  const ls={get(k){try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
   const sb=CONFIG.supabase, H={apikey:sb.anonKey,Authorization:"Bearer "+sb.anonKey,"Content-Type":"application/json"};
-  async function loadSb(){ try{ const r=await fetch(sb.url+"/rest/v1/gift_claims?select=gift_id,guest_name",{headers:H}); const a=await r.json(); gifts={}; a.forEach(x=>gifts[x.gift_id]={name:x.guest_name}); emit(); }catch(e){} }
+  async function loadSb(){ const r=await fetch(sb.url+"/rest/v1/gift_claims?select=gift_id,guest_name",{headers:H}); if(!r.ok) throw new Error("gifts"); const a=await r.json(); gifts={}; a.forEach(x=>gifts[x.gift_id]={name:x.guest_name}); emit(); }
   return {
     get mode(){return mode},
     async init(){
-      if(sb.url&&sb.anonKey){ mode="sb"; await loadSb(); setInterval(loadSb,15000); return; }
-      try{
-        const c=window.claude&&await Promise.race([window.claude.use("db"),new Promise(r=>setTimeout(()=>r(null),4000))]);
-        if(c){ db=c; mode="artifact"; db.collection("gifts").onSnapshot(s=>{gifts={};s.docs.forEach(d=>gifts[d.id]=d.data());emit();},()=>{}); return; }
-      }catch(e){}
-      gifts=ls.get("ae_gifts")||{}; emit();
+      try{ localStorage.removeItem("ae_rsvps"); localStorage.removeItem("ae_gifts"); }catch(e){}
+      if(!sb.url||!sb.anonKey){ mode="unavailable"; gifts={}; emit(); return; }
+      mode="sb";
+      try{ await loadSb(); setInterval(()=>loadSb().catch(()=>{}),15000); }
+      catch(e){ mode="unavailable"; gifts={}; emit(); }
     },
     onGifts(f){subs.add(f);f({...gifts});return()=>subs.delete(f)},
     async claimGift(id,name){
@@ -218,20 +212,13 @@ const Service = (() => {
         if(r.status===409){ await loadSb(); return {ok:false}; }
         if(!r.ok) throw new Error("claim"); await loadSb(); return {ok:true};
       }
-      if(mode==="artifact"){
-        const cur=await db.collection("gifts").doc(id).get();
-        if(cur.exists) return {ok:false};
-        await db.collection("gifts").doc(id).set({name,at:Date.now()}); return {ok:true};
-      }
-      const all=ls.get("ae_gifts")||{}; if(all[id]) return {ok:false};
-      all[id]={name,at:Date.now()}; ls.set("ae_gifts",all); gifts=all; emit(); return {ok:true};
+      throw new Error("shared_backend_unavailable");
     },
     async login(email,pw){
       const r=await fetch(sb.url+"/auth/v1/token?grant_type=password",{method:"POST",headers:{apikey:sb.anonKey,"Content-Type":"application/json"},body:JSON.stringify({email,password:pw})});
       if(!r.ok) throw new Error("login"); return (await r.json()).access_token;
     },
     async adminLoad(token){
-      const mine=Object.entries(gifts).map(([id,v])=>({id,name:v.name,at:v.at}));
       if(mode==="sb"){
         const h={...H,Authorization:"Bearer "+token};
         const [r,g]=await Promise.all([fetch(sb.url+"/rest/v1/rsvps?select=*&order=created_at.desc",{headers:h}),fetch(sb.url+"/rest/v1/gift_claims?select=*&order=chosen_at.desc",{headers:h})]);
@@ -239,14 +226,11 @@ const Service = (() => {
         const a=await r.json(), b=await g.json();
         return {rsvps:a.map(x=>({name:x.guest_name,attending:x.attending,at:Date.parse(x.created_at)})),gifts:b.map(x=>({id:x.gift_id,name:x.guest_name,at:Date.parse(x.chosen_at)}))};
       }
-      if(mode==="artifact"){ const s=await db.collection("rsvps").get(); return {rsvps:s.docs.map(d=>d.data()),gifts:mine}; }
-      return {rsvps:ls.get("ae_rsvps")||[],gifts:mine};
+      throw new Error("shared_backend_unavailable");
     },
     async saveRsvp(name,attending){
       if(mode==="sb"){ const r=await fetch(sb.url+"/rest/v1/rsvps",{method:"POST",headers:{...H,Prefer:"return=minimal"},body:JSON.stringify({guest_name:name,attending})}); if(!r.ok) throw new Error("rsvp"); return; }
-      const rec={name,attending,at:Date.now()};
-      if(mode==="artifact"){ let uid="g"+Date.now(); try{ const u=await window.claude.use("user"); uid=String(await u.id()); }catch(e){} await db.collection("rsvps").doc(uid).set(rec); }
-      else{const a=ls.get("ae_rsvps")||[];a.push(rec);ls.set("ae_rsvps",a);}
+      throw new Error("shared_backend_unavailable");
     }
   };
 })();
@@ -341,6 +325,7 @@ const Pages = {
       <p class="eyebrow" style="text-align:center">Com carinho</p>
       <h1>Lista de presentes</h1>
       <p class="sub">Cada escolha ajuda a construir o nosso lar.</p>
+      <p id="gift-state" role="status" style="color:var(--soft);text-align:center;margin:12px 0"></p>
       <div class="chips" id="chips" role="group" aria-label="Filtrar por categoria"></div>
       <div class="grid" id="grid"></div>
       <section class="pix rv"><p class="eyebrow">Prefere nos presentear com um PIX?</p>
@@ -354,12 +339,14 @@ const Pages = {
 let FCAT="Todos", LASTMAP={};
 function renderGifts(map){
   LASTMAP=map; const g=$("#grid"); if(!g) return;
+  const unavailable=Service.mode==="unavailable", state=$("#gift-state");
+  if(state) state.textContent=unavailable?"A lista compartilhada ainda não está conectada; escolhas não podem ser registradas agora.":"";
   const cats=["Todos","Disponíveis",...Object.keys(CATS)];
   $("#chips").innerHTML=cats.map(c=>`<button class="chip" type="button" data-c="${c}" aria-pressed="${c===FCAT}">${c}</button>`).join("");
   const list=GIFTS.filter(x=>FCAT==="Todos"||(FCAT==="Disponíveis"?!map[x.id]:x.cat===FCAT));
   g.innerHTML=list.map(x=>{const t=map[x.id];
     return `<article class="gift ${t?"taken":""}"><div class="ic" aria-hidden="true">${x.ic}</div><div class="ct">${x.cat}</div><h3>${esc(x.n)}</h3><div class="pr" style="margin-top:10px">${brl(x.v)}</div>
-      ${t?`<div class="by">Presente escolhido por ${esc(t.name)}</div>`:`<button class="btn" data-g="${x.id}">Presentear</button>`}</article>`;}).join("")||'<p style="grid-column:1/-1;text-align:center;color:var(--soft)">Nenhum presente nesta categoria.</p>';
+      ${t?`<div class="by">Presente escolhido por ${esc(t.name)}</div>`:unavailable?'<div class="by">Indisponível</div>':`<button class="btn" data-g="${x.id}">Presentear</button>`}</article>`;}).join("")||'<p style="grid-column:1/-1;text-align:center;color:var(--soft)">Nenhum presente nesta categoria.</p>';
 }
 function giftModal(id){
   const gift=GIFTS.find(x=>x.id===id);
@@ -388,8 +375,9 @@ $("#modal").addEventListener("click", e => { if(e.target.id==="modal") closeModa
 addEventListener("keydown", e => { if(e.key==="Escape") closeModal(); });
 
 /* ============ ROTEADOR (hash: funciona em link direto) ============ */
-let unsub = null;
+let unsub = null, adminRefresh = null;
 function route(){
+  clearInterval(adminRefresh); adminRefresh=null;
   const h = (location.hash.replace(/^#/,"") || "/").replace(/\/$/,"") || "/";
   const app = $("#app"); unsub && unsub(); unsub = null;
   const map = { "/":"home", "/confirmar-presenca":"rsvp", "/manual-dos-convidados":"manual", "/lista-de-presentes":"gifts", "/painel-dos-noivos":"admin" };
@@ -402,12 +390,11 @@ function route(){
   reveal(); parallax(); startCd();
 }
 async function bindAdmin(){
-  const box=$("#admbody"); await READY; let token=null;
+  const box=$("#admbody"); await READY; let token=null, tab="y", q="";
   const dt=s=>s?new Date(s).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"}):"";
   const gname=id=>{const g=GIFTS.find(x=>x.id===id);return g?g.n:id};
   async function show(){
     let d; try{ d=await Service.adminLoad(token); }catch(e){ box.innerHTML='<p class="msg">Sem permissão para ver estes dados.</p>'; return; }
-    let tab="y", q="";
     const yes=d.rsvps.filter(r=>r.attending), no=d.rsvps.filter(r=>!r.attending);
     const draw=()=>{
       const L=(tab==="y"?yes:tab==="n"?no:d.gifts).filter(r=>(r.name+(r.id?gname(r.id):"")).toLowerCase().includes(q));
@@ -424,15 +411,12 @@ async function bindAdmin(){
       $("#ar").onclick=show;
     };
     draw();
+    if(!adminRefresh) adminRefresh=setInterval(()=>{if(document.visibilityState==="visible") show();},15000);
   }
   if(Service.mode==="sb"){
     box.innerHTML='<form id="lf"><label for="le">E-mail</label><input type="text" id="le" autocomplete="username"><label for="lp">Senha</label><input type="password" id="lp" autocomplete="current-password" style="width:100%;font:300 1.05rem var(--sans);padding:14px 2px;border:0;border-bottom:1px solid var(--ink);background:transparent;color:var(--ink)"><p class="err" id="le2" role="alert"></p><div style="text-align:center;margin-top:14px"><button class="btn fill" type="submit">Entrar</button></div></form>';
     $("#lf").onsubmit=async e=>{e.preventDefault();try{token=await Service.login($("#le").value.trim(),$("#lp").value);await show();}catch(x){$("#le2").textContent="E-mail ou senha incorretos."}};
-  } else if(Service.mode==="artifact"){
-    let owner=false; try{ const u=await window.claude.use("user"); owner=!!(u&&u.isOwner()); }catch(e){}
-    if(!owner){ box.innerHTML='<p class="msg">Acesso restrito aos noivos.</p>'; return; }
-    show();
-  } else { box.innerHTML='<p class="msg" style="color:var(--soft);font-size:.85rem">Modo demonstração: mostrando apenas dados deste aparelho.</p>'; const d=document.createElement("div"); box.appendChild(d); show().then(()=>{}); }
+  } else { box.innerHTML='<p class="msg" style="color:var(--soft)">O painel compartilhado está aguardando a configuração do banco de dados.</p>'; }
 }
 let cdT=null;
 function startCd(){
@@ -448,7 +432,7 @@ function bindRsvp(){
     const nm = $("#nm").value.trim(), a = (document.querySelector("input[name=a]:checked")||{}).value;
     if(nm.length < 2){ $("#er").textContent = "Por favor, informe seu nome."; return; }
     if(!a){ $("#er").textContent = "Escolha uma das opções."; return; }
-    try{ await Service.saveRsvp(nm, a === "sim"); }catch(x){ $("#er").textContent = "Não foi possível enviar agora. Tente novamente."; return; }
+    try{ await Service.saveRsvp(nm, a === "sim"); }catch(x){ $("#er").textContent = Service.mode==="unavailable" ? "A confirmação ainda não está disponível. Tente novamente mais tarde." : "Não foi possível enviar agora. Tente novamente."; return; }
     $("#rsvp").innerHTML = `<div class="msg"><h2 style="font-size:2.2rem">${a==="sim"?"Até lá":"Obrigado"}, ${esc(nm.split(" ")[0])}.</h2>
       <p class="lead" style="margin:14px auto 28px">Obrigado por fazer parte da nossa história. Estamos muito felizes em compartilhar esse momento com você.</p>
       <a class="btn" href="#/">Voltar ao convite</a></div>`;
