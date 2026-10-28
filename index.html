@@ -218,7 +218,10 @@ const Service = (() => {
     },
     async adminLoad(){
       const data=await request("/api/admin-data");
-      return {rsvps:data.rsvps.map(x=>({name:x.name,attending:x.attending,at:Date.parse(x.at)})),gifts:data.gifts.map(x=>({id:x.id,name:x.name,at:Date.parse(x.at)}))};
+      return {rsvps:data.rsvps.map(x=>({id:x.id,name:x.name,attending:x.attending,at:Date.parse(x.at)})),gifts:data.gifts.map(x=>({id:x.id,name:x.name,at:Date.parse(x.at)}))};
+    },
+    async adminRecord(action,type,id,name){
+      return request("/api/admin-records",{method:"POST",body:JSON.stringify({action,type,id,name})});
     },
     async saveRsvp(name,attending){
       if(mode!=="api") throw new Error("shared_backend_unavailable");
@@ -398,12 +401,26 @@ async function bindAdmin(){
         <div class="gift"><h3 style="font-size:2rem">${no.length}</h3><p>não vão</p></div></div>
         <div class="chips">${[["y","Confirmados"],["n","Não vão"],["g","Presentes"]].map(([k,l])=>`<button class="chip" type="button" data-t="${k}" aria-pressed="${k===tab}">${l}</button>`).join("")}</div>
         <input type="text" id="aq" placeholder="Buscar por nome" value="${esc(q)}" aria-label="Buscar">
-        <div style="margin-top:18px">${L.length?L.map(r=>`<div class="guide" style="padding:14px 0;display:flex;justify-content:space-between;gap:12px"><span>${esc(r.name)}${r.id?`<br><small style="color:var(--soft)">${esc(gname(r.id))}</small>`:""}</span><small style="color:var(--soft);white-space:nowrap">${dt(r.at)}</small></div>`).join(""):'<p class="msg" style="color:var(--soft)">Ninguém por aqui ainda.</p>'}</div>
+        <div style="margin-top:18px">${L.length?L.map(r=>`<div class="guide" style="padding:14px 0;display:flex;justify-content:space-between;align-items:center;gap:12px"><span>${esc(r.name)}${r.id&&tab==="g"?`<br><small style="color:var(--soft)">${esc(gname(r.id))}</small>`:""}</span><div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap"><small style="color:var(--soft);white-space:nowrap">${dt(r.at)}</small><button class="btn" type="button" data-edit="${tab==="g"?"gift":"rsvp"}" data-id="${esc(String(r.id))}">Editar nome</button><button class="btn" type="button" data-remove="${tab==="g"?"gift":"rsvp"}" data-id="${esc(String(r.id))}">Remover</button></div></div>`).join(""):'<p class="msg" style="color:var(--soft)">Ninguém por aqui ainda.</p>'}</div>
         <div style="text-align:center;margin-top:24px"><button class="btn" id="ar" type="button">Atualizar</button> <button class="btn" id="al" type="button">Sair</button></div>`;
       box.querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{tab=b.dataset.t;draw()});
       const i=$("#aq"); i.oninput=e=>{q=e.target.value.toLowerCase();const p=i.selectionStart;draw();const n=$("#aq");n.focus();n.setSelectionRange(p,p)};
       $("#ar").onclick=show;
       $("#al").onclick=async()=>{await Service.logout();loginForm();};
+      box.querySelectorAll("[data-edit]").forEach(b=>b.onclick=async()=>{
+        const row=L.find(x=>String(x.id)===b.dataset.id); if(!row)return;
+        const name=prompt("Digite o novo nome:",row.name); if(name===null)return;
+        if(name.trim().length<2||name.trim().length>120){alert("O nome deve ter entre 2 e 120 caracteres.");return;}
+        try{await Service.adminRecord("rename",b.dataset.edit,row.id,name.trim());await show();}
+        catch(e){alert("Não foi possível editar o nome. Atualize o painel e tente novamente.");}
+      });
+      box.querySelectorAll("[data-remove]").forEach(b=>b.onclick=async()=>{
+        const row=L.find(x=>String(x.id)===b.dataset.id); if(!row)return;
+        const item=b.dataset.remove==="gift"?`a escolha de presente de ${row.name}`:`a confirmação de ${row.name}`;
+        if(!confirm(`Remover ${item}?`))return;
+        try{await Service.adminRecord("delete",b.dataset.remove,row.id);await show();}
+        catch(e){alert("Não foi possível remover o registro. Atualize o painel e tente novamente.");}
+      });
     };
     draw();
     if(!adminRefresh) adminRefresh=setInterval(()=>{if(document.visibilityState==="visible") show();},15000);
